@@ -76,47 +76,46 @@ jobs:
           exit 1
         fi
 
-    # 7. 查找 libjpeg-turbo 库文件
-    - name: Find libjpeg-turbo library
+    # 7. 修复 Aseprite 中的硬编码 libjpeg-turbo 路径
+    - name: Fix hardcoded libjpeg-turbo path in Aseprite CMakeLists
       shell: bash
       run: |
-        echo "查找 libjpeg-turbo 库文件..."
+        echo "修复 Aseprite CMakeLists.txt 中的硬编码路径..."
         
-        # 首先检查常见的库文件位置
-        COMMON_LIB_PATHS=(
-          "skia/out/Release-x64/libjpeg.lib"
-          "skia/out/Release-x64/jpeg.lib"
-          "skia/out/Release-x64/turbojpeg.lib"
-          "skia/third_party/externals/libjpeg-turbo/libjpeg.lib"
-        )
+        # 备份原始文件
+        cp src/CMakeLists.txt src/CMakeLists.txt.backup
+        cp src/app/CMakeLists.txt src/app/CMakeLists.txt.backup
         
-        LIB_PATH=""
-        for path in "${COMMON_LIB_PATHS[@]}"; do
-          if [ -f "$path" ]; then
-            LIB_PATH="$path"
-            echo "找到库文件: $LIB_PATH"
-            break
-          fi
-        done
+        echo "原始文件备份完成"
         
-        # 如果没有在常见位置找到，则在整个目录中搜索
-        if [ -z "$LIB_PATH" ]; then
-          echo "在常见位置未找到库文件，开始全局搜索..."
-          FOUND_LIBS=$(find skia -name "*jpeg*.lib" -o -name "*turbo*.lib" | head -5)
-          if [ -n "$FOUND_LIBS" ]; then
-            LIB_PATH=$(echo "$FOUND_LIBS" | head -1)
-            echo "找到库文件: $LIB_PATH"
-          else
-            echo "警告: 未找到任何 libjpeg-turbo 库文件"
-            # 继续执行，可能在配置阶段不需要库文件
-          fi
-        fi
+        # 修复 src/CMakeLists.txt - 替换所有硬编码的相对路径
+        echo "修复 src/CMakeLists.txt..."
+        sed -i 's|\.\./skia/third_party/externals/libjpeg-turbo|${SKIA_DIR}/third_party/externals/libjpeg-turbo|g' src/CMakeLists.txt
         
-        # 将库文件路径保存到环境变量
-        if [ -n "$LIB_PATH" ]; then
-          echo "LIB_PATH=$LIB_PATH" >> $GITHUB_ENV
+        # 修复 src/app/CMakeLists.txt - 替换所有硬编码的相对路径
+        echo "修复 src/app/CMakeLists.txt..."
+        sed -i 's|\.\./skia/third_party/externals/libjpeg-turbo|${SKIA_DIR}/third_party/externals/libjpeg-turbo|g' src/app/CMakeLists.txt
+        
+        echo "修复完成。修改内容："
+        echo "src/CMakeLists.txt 中的相关行:"
+        grep -n "libjpeg-turbo" src/CMakeLists.txt || echo "没有找到相关行"
+        echo ""
+        echo "src/app/CMakeLists.txt 中的相关行:"
+        grep -n "libjpeg-turbo" src/app/CMakeLists.txt || echo "没有找到相关行"
+        
+        # 验证修改是否正确
+        echo ""
+        echo "验证修改:"
+        if grep -q "\${SKIA_DIR}/third_party/externals/libjpeg-turbo" src/CMakeLists.txt src/app/CMakeLists.txt; then
+          echo "✓ 修改成功，找到了替换后的路径"
         else
-          echo "LIB_PATH=" >> $GITHUB_ENV
+          echo "✗ 修改可能失败，未找到替换后的路径"
+          echo "尝试恢复备份并重新检查..."
+          cp src/CMakeLists.txt.backup src/CMakeLists.txt
+          cp src/app/CMakeLists.txt.backup src/app/CMakeLists.txt
+          echo "重新检查原始文件中的路径:"
+          grep -n "\.\./skia/third_party/externals/libjpeg-turbo" src/CMakeLists.txt src/app/CMakeLists.txt
+          exit 1
         fi
 
     # 8. 创建构建目录并配置CMake
@@ -126,25 +125,17 @@ jobs:
         mkdir -p build
         cd build
         
-        echo "使用头文件目录: $HEADER_DIR"
-        echo "使用库文件路径: $LIB_PATH"
+        echo "使用修复后的 CMakeLists.txt 进行配置..."
+        echo "SKIA_DIR: ../skia"
+        echo "头文件目录: $HEADER_DIR"
         
-        # 构建CMake命令
-        CMAKE_CMD="cmake -G Ninja .. \
+        # 使用修复后的配置
+        cmake -G Ninja .. \
           -DCMAKE_BUILD_TYPE=Release \
           -DLAF_BACKEND=skia \
           -DSKIA_DIR=../skia \
           -DSKIA_LIBRARY_DIR=../skia/out/Release-x64 \
-          -DSKIA_LIBRARY=../skia/out/Release-x64/skia.lib \
-          -DLIBJPEG_TURBO_INCLUDE_DIR=\"$HEADER_DIR\""
-        
-        # 如果找到了库文件，添加到CMake命令
-        if [ -n "$LIB_PATH" ]; then
-          CMAKE_CMD="$CMAKE_CMD -DLIBJPEG_TURBO_LIBRARY=\"$LIB_PATH\""
-        fi
-        
-        echo "运行CMake命令: $CMAKE_CMD"
-        eval $CMAKE_CMD
+          -DSKIA_LIBRARY=../skia/out/Release-x64/skia.lib
 
     # 9. 编译Aseprite
     - name: Build Aseprite
@@ -159,3 +150,10 @@ jobs:
       with:
         name: aseprite-windows-build
         path: build/bin/aseprite.exe
+
+    # 11. 清理备份文件（可选）
+    - name: Cleanup backup files
+      shell: bash
+      run: |
+        rm -f src/CMakeLists.txt.backup src/app/CMakeLists.txt.backup
+        echo "备份文件已清理"
