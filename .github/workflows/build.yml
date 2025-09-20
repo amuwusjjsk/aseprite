@@ -23,42 +23,38 @@ jobs:
     - name: Setup MSVC environment
       uses: ilammy/msvc-dev-cmd@v1
 
-    # 4. 下载Skia (使用官方链接，含重试机制)
+    # 4. 下载Skia (使用官方链接，含重试机制) - 已修复
     - name: Download Skia
       shell: bash
       run: |
-        $SKIA_URL = "https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Windows-Release-x64.zip"
-        $SKIA_ZIP = "skia.zip"
-        $RETRY_COUNT = 3
+        SKIA_URL="https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Windows-Release-x64.zip"
+        SKIA_ZIP="skia.zip"
+        RETRY_COUNT=3
         
         echo "Downloading Skia from official release: $SKIA_URL"
         
-        # 重试循环
-        for ($i = 1; $i -le $RETRY_COUNT; $i++) {
+        for ((i=1; i<=$RETRY_COUNT; i++)); do
           echo "Attempt $i of $RETRY_COUNT"
           
-          # 使用curl下载，-L跟随重定向
-          curl -L -o $SKIA_ZIP $SKIA_URL
+          curl -L -o "$SKIA_ZIP" "$SKIA_URL"
           
-          # 检查文件大小是否合理（应远大于9字节）
-          $FILE_SIZE = (Get-Item $SKIA_ZIP).Length
+          FILE_SIZE=$(stat -f%z "$SKIA_ZIP" 2>/dev/null || du -b "$SKIA_ZIP" | cut -f1)
           echo "Downloaded file size: $FILE_SIZE bytes"
           
-          if ($FILE_SIZE -gt 1000000) {
+          if [ "$FILE_SIZE" -gt 1000000 ]; then
             echo "Download completed successfully."
             break
-          }
+          fi
           
           echo "Download may have failed, file is too small. Retrying in 5 seconds..."
-          Remove-Item $SKIA_ZIP -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 5
+          rm -f "$SKIA_ZIP"
+          sleep 5
           
-          # 最后一次尝试后失败
-          if ($i -eq $RETRY_COUNT) {
+          if [ "$i" -eq "$RETRY_COUNT" ]; then
             echo "ERROR: Failed to download Skia after $RETRY_COUNT attempts."
             exit 1
-          }
-        }
+          fi
+        done
 
     # 5. 解压Skia
     - name: Extract Skia
@@ -67,7 +63,6 @@ jobs:
         echo "Extracting Skia archive..."
         7z x skia.zip -oskia -y
         
-        # 验证解压结果
         echo "Contents of skia directory:"
         ls -la skia/
         
@@ -76,23 +71,22 @@ jobs:
           echo "✓ skia.lib found successfully"
         else
           echo "✗ ERROR: skia.lib not found!"
-          echo "Available files in skia/out/Release-x64/:"
           ls -la skia/out/Release-x64/ 2>/dev/null || echo "Directory does not exist"
           exit 1
         fi
 
-    # 6. 创建构建目录并配置CMake
+    # 6. 创建构建目录并配置CMake - 已修复
     - name: Configure CMake
       shell: bash
       run: |
-        mkdir build
+        mkdir -p build
         cd build
-        cmake -G Ninja .. `
-          -DCMAKE_BUILD_TYPE=Release `
-          -DLAF_BACKEND=skia `
-          -DSKIA_DIR=$env:GITHUB_WORKSPACE/skia `
-          -DSKIA_LIBRARY_DIR=$env:GITHUB_WORKSPACE/skia/out/Release-x64 `
-          -DSKIA_LIBRARY=$env:GITHUB_WORKSPACE/skia/out/Release-x64/skia.lib
+        cmake -G Ninja .. \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DLAF_BACKEND=skia \
+          -DSKIA_DIR=../skia \
+          -DSKIA_LIBRARY_DIR=../skia/out/Release-x64 \
+          -DSKIA_LIBRARY=../skia/out/Release-x64/skia.lib
 
     # 7. 编译Aseprite
     - name: Build Aseprite
@@ -108,5 +102,3 @@ jobs:
         name: aseprite-windows-build
         path: |
           build/bin/aseprite.exe
-          # 如果需要，可以添加其他相关文件
-          # build/bin/data/
