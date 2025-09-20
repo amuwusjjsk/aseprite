@@ -38,23 +38,45 @@ jobs:
         7z x skia.zip -oskia -y
         echo "Skia 解压完成"
 
-    # 6. 验证头文件位置（可选，用于确认）
-    - name: Verify header files location
+    # 6. 查找 libjpeg-turbo 头文件的实际位置
+    - name: Find actual libjpeg-turbo header location
       shell: bash
       run: |
-        echo "验证 libjpeg-turbo 头文件位置..."
+        echo "查找 libjpeg-turbo 头文件的实际位置..."
+        
         LIBJPEG_DIR="skia/third_party/externals/libjpeg-turbo"
         
-        if [ -d "$LIBJPEG_DIR/src" ]; then
-          echo "找到 src 目录，包含以下头文件:"
-          ls -la "$LIBJPEG_DIR/src/" | grep "\.h$"
-          echo "✓ 头文件位置确认正确"
+        echo "libjpeg-turbo 目录结构:"
+        find "$LIBJPEG_DIR" -maxdepth 2 -type d | sort
+        
+        echo ""
+        echo "在整个 Skia 目录中搜索 jpeg 头文件:"
+        JPEG_HEADERS=$(find skia -name "jpeglib.h" -o -name "jerror.h" -o -name "jmorecfg.h" -o -name "jconfig.h" -o -name "turbojpeg.h")
+        
+        if [ -n "$JPEG_HEADERS" ]; then
+          echo "找到以下 jpeg 头文件:"
+          echo "$JPEG_HEADERS"
+          
+          # 获取第一个头文件的目录路径
+          FIRST_HEADER=$(echo "$JPEG_HEADERS" | head -1)
+          HEADER_DIR=$(dirname "$FIRST_HEADER")
+          
+          echo ""
+          echo "第一个头文件路径: $FIRST_HEADER"
+          echo "头文件目录: $HEADER_DIR"
+          echo "该目录内容:"
+          ls -la "$HEADER_DIR/"
+          
+          # 将路径保存到环境变量中供后续步骤使用
+          echo "HEADER_DIR=$HEADER_DIR" >> $GITHUB_ENV
         else
-          echo "错误: 没有找到 src 目录"
+          echo "错误: 未找到任何 jpeg 头文件"
+          echo "Skia 目录结构:"
+          find skia -name "*.h" | head -20
           exit 1
         fi
 
-    # 7. 创建构建目录并配置CMake（关键修改！）
+    # 7. 创建构建目录并配置CMake
     - name: Configure CMake
       shell: bash
       run: |
@@ -67,7 +89,7 @@ jobs:
           -DSKIA_DIR=../skia \
           -DSKIA_LIBRARY_DIR=../skia/out/Release-x64 \
           -DSKIA_LIBRARY=../skia/out/Release-x64/skia.lib \
-          -DLIBJPEG_TURBO_INCLUDE_DIR=../skia/third_party/externals/libjpeg-turbo/src
+          -DLIBJPEG_TURBO_INCLUDE_DIR=$HEADER_DIR
 
     # 8. 编译Aseprite
     - name: Build Aseprite
