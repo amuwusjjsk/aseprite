@@ -76,29 +76,84 @@ jobs:
           exit 1
         fi
 
-    # 7. 创建构建目录并配置CMake
+    # 7. 查找 libjpeg-turbo 库文件
+    - name: Find libjpeg-turbo library
+      shell: bash
+      run: |
+        echo "查找 libjpeg-turbo 库文件..."
+        
+        # 首先检查常见的库文件位置
+        COMMON_LIB_PATHS=(
+          "skia/out/Release-x64/libjpeg.lib"
+          "skia/out/Release-x64/jpeg.lib"
+          "skia/out/Release-x64/turbojpeg.lib"
+          "skia/third_party/externals/libjpeg-turbo/libjpeg.lib"
+        )
+        
+        LIB_PATH=""
+        for path in "${COMMON_LIB_PATHS[@]}"; do
+          if [ -f "$path" ]; then
+            LIB_PATH="$path"
+            echo "找到库文件: $LIB_PATH"
+            break
+          fi
+        done
+        
+        # 如果没有在常见位置找到，则在整个目录中搜索
+        if [ -z "$LIB_PATH" ]; then
+          echo "在常见位置未找到库文件，开始全局搜索..."
+          FOUND_LIBS=$(find skia -name "*jpeg*.lib" -o -name "*turbo*.lib" | head -5)
+          if [ -n "$FOUND_LIBS" ]; then
+            LIB_PATH=$(echo "$FOUND_LIBS" | head -1)
+            echo "找到库文件: $LIB_PATH"
+          else
+            echo "警告: 未找到任何 libjpeg-turbo 库文件"
+            # 继续执行，可能在配置阶段不需要库文件
+          fi
+        fi
+        
+        # 将库文件路径保存到环境变量
+        if [ -n "$LIB_PATH" ]; then
+          echo "LIB_PATH=$LIB_PATH" >> $GITHUB_ENV
+        else
+          echo "LIB_PATH=" >> $GITHUB_ENV
+        fi
+
+    # 8. 创建构建目录并配置CMake
     - name: Configure CMake
       shell: bash
       run: |
         mkdir -p build
         cd build
         
-        cmake -G Ninja .. \
+        echo "使用头文件目录: $HEADER_DIR"
+        echo "使用库文件路径: $LIB_PATH"
+        
+        # 构建CMake命令
+        CMAKE_CMD="cmake -G Ninja .. \
           -DCMAKE_BUILD_TYPE=Release \
           -DLAF_BACKEND=skia \
           -DSKIA_DIR=../skia \
           -DSKIA_LIBRARY_DIR=../skia/out/Release-x64 \
           -DSKIA_LIBRARY=../skia/out/Release-x64/skia.lib \
-          -DLIBJPEG_TURBO_INCLUDE_DIR=$HEADER_DIR
+          -DLIBJPEG_TURBO_INCLUDE_DIR=\"$HEADER_DIR\""
+        
+        # 如果找到了库文件，添加到CMake命令
+        if [ -n "$LIB_PATH" ]; then
+          CMAKE_CMD="$CMAKE_CMD -DLIBJPEG_TURBO_LIBRARY=\"$LIB_PATH\""
+        fi
+        
+        echo "运行CMake命令: $CMAKE_CMD"
+        eval $CMAKE_CMD
 
-    # 8. 编译Aseprite
+    # 9. 编译Aseprite
     - name: Build Aseprite
       shell: bash
       run: |
         cd build
         ninja aseprite
 
-    # 9. 上传构建成果
+    # 10. 上传构建成果
     - name: Upload Aseprite Artifact
       uses: actions/upload-artifact@v4
       with:
