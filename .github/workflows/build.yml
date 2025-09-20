@@ -1,53 +1,70 @@
-name: build
+name: Build Aseprite on Windows
+
 on: [push, pull_request]
+
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest]
-        build_type: [Release]
-        enable_ui: [on]
-        include:
-          - os: windows-latest
-            build_type: Release
-            enable_ui: on
+  build-windows:
+    runs-on: windows-2022  # 使用 windows-2022 确保环境一致性
+
     steps:
-    - uses: actions/checkout@v3
+    # 1. 检出代码及子模块
+    - name: Checkout repository and submodules
+      uses: actions/checkout@v4  # 更新到v4版本[citation:2][citation:5][citation:8]
       with:
         submodules: 'recursive'
-    - name: ccache
-      uses: hendrikmuhs/ccache-action@v1
-      if: runner.os == 'Linux'
-      with:
-        key: ${{ matrix.os }}-${{ matrix.enable_ui }}
-    - uses: seanmiddleditch/gha-setup-ninja@master
-    - uses: ilammy/msvc-dev-cmd@v1
-      if: runner.os == 'Windows'
-    - name: Generating Makefiles
+
+    # 2. 安装构建工具 (CMake, Ninja)
+    - name: Install CMake and Ninja
+      run: choco install cmake ninja  # 使用 Chocolatey 包管理器安装，或使用 actions/setup-cmake
+
+    # 3. 设置 MSVC 开发环境[citation:1]
+    - name: Setup MSVC Developer Command Prompt
+      uses: ilammy/msvc-dev-cmd@v1  # 此操作旨在设置MSVC环境
+
+    # 4. 下载并解压 Skia (替换为您自己的可靠下载链接)
+    - name: Download and extract Skia
       shell: bash
       run: |
-        export enable_ccache=off
-        curl -L https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Windows-Release-x64.zip --output skia.zip
-        curl -L https://github.com/blueloveTH/aseprite/releases/download/v0.01/libcrypto-1_1-x64.dll --output libcrypto-1_1-x64.dll
-        7z x skia.zip
-        cmake -S . -B build -G Ninja \
-          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-          -DENABLE_UI=${{ matrix.enable_ui }} \
-          -DENABLE_CCACHE=$enable_ccache \
+        # 考虑将Skia作为GitHub Release的artifact上传并在此下载，或使用稳定的存储源
+        curl -L -o skia.zip https://github.com/aseprite/skia/releases/download/aseprite-m124/skia-windows-Release-x64.zip
+        7z x skia.zip -oskia
+
+    # 5. 验证 Skia 提取结果
+    - name: Verify skia extraction
+      shell: bash
+      run: |
+        echo "Listing skia directory:"
+        ls -la skia/
+
+    # 6. 生成构建文件 (Configure with CMake)
+    - name: Generate build files with CMake
+      shell: bash
+      run: |
+        mkdir build
+        cd build
+        # 注意根据Skia的实际解压路径调整SKIA_DIR等变量
+        cmake -G Ninja .. \
+          -DCMAKE_BUILD_TYPE=Release \
           -DLAF_BACKEND=skia \
-          -DSKIA_DIR=./skia \
-          -DSKIA_LIBRARY_DIR=./skia/out/Release-x64 \
-          -DSKIA_LIBRARY=./skia/out/Release-x64/skia.lib
-    - name: Compiling
+          -DSKIA_DIR=$GITHUB_WORKSPACE/skia \
+          -DSKIA_LIBRARY_DIR=$GITHUB_WORKSPACE/skia/out/Release-x64 \
+          -DSKIA_LIBRARY=$GITHUB_WORKSPACE/skia/out/Release-x64/skia.lib
+
+    # 7. 编译项目
+    - name: Compile with Ninja
       shell: bash
       run: |
-        cd build && ninja
-    - uses: actions/upload-artifact@v4  # 已从 v3 升级到 v4
+        cd build
+        ninja aseprite  # 明确指定目标
+
+    # 8. 上传构建产物 (使用更新的v4版本)[citation:2][citation:5][citation:8]
+    - name: Upload Aseprite Artifact
+      uses: actions/upload-artifact@v4
       with:
-        name: aseprite
+        name: aseprite-windows-build
         path: |
-          libcrypto-1_1-x64.dll
-          D:/a/aseprite/aseprite/build/bin/data
-          D:/a/aseprite/aseprite/build/bin/aseprite.exe
+          build/bin/aseprite.exe
+          # 如果 libcrypto-1_1-x64.dll 是运行时依赖且已下载，包含它
+          libcrypto-1_1-x64.dll 
+          # 根据需要决定是否包含 data 目录
+          # build/bin/data/
