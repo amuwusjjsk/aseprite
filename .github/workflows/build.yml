@@ -23,121 +23,51 @@ jobs:
     - name: Setup MSVC environment
       uses: ilammy/msvc-dev-cmd@v1
 
-    # 4. 下载Skia (使用官方链接，含重试机制)
+    # 4. 下载Skia
     - name: Download Skia
       shell: bash
       run: |
         SKIA_URL="https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Windows-Release-x64.zip"
         SKIA_ZIP="skia.zip"
-        RETRY_COUNT=3
-        
-        echo "Downloading Skia from official release: $SKIA_URL"
-        
-        for ((i=1; i<=$RETRY_COUNT; i++)); do
-          echo "Attempt $i of $RETRY_COUNT"
-          
-          curl -L -o "$SKIA_ZIP" "$SKIA_URL"
-          
-          FILE_SIZE=$(stat -f%z "$SKIA_ZIP" 2>/dev/null || du -b "$SKIA_ZIP" | cut -f1)
-          echo "Downloaded file size: $FILE_SIZE bytes"
-          
-          if [ "$FILE_SIZE" -gt 1000000 ]; then
-            echo "Download completed successfully."
-            break
-          fi
-          
-          echo "Download may have failed, file is too small. Retrying in 5 seconds..."
-          rm -f "$SKIA_ZIP"
-          sleep 5
-          
-          if [ "$i" -eq "$RETRY_COUNT" ]; then
-            echo "ERROR: Failed to download Skia after $RETRY_COUNT attempts."
-            exit 1
-          fi
-        done
+        curl -L -o "$SKIA_ZIP" "$SKIA_URL"
 
     # 5. 解压Skia
     - name: Extract Skia
       shell: bash
       run: |
-        echo "Extracting Skia archive..."
         7z x skia.zip -oskia -y
+        echo "Skia 解压完成"
+
+    # 6. 验证头文件位置（可选，用于确认）
+    - name: Verify header files location
+      shell: bash
+      run: |
+        echo "验证 libjpeg-turbo 头文件位置..."
+        LIBJPEG_DIR="skia/third_party/externals/libjpeg-turbo"
         
-        # 验证解压结果
-        echo "Contents of skia directory:"
-        ls -la skia/
-        
-        echo "Checking for expected files:"
-        if [ -f "skia/out/Release-x64/skia.lib" ]; then
-          echo "✓ skia.lib found successfully"
+        if [ -d "$LIBJPEG_DIR/src" ]; then
+          echo "找到 src 目录，包含以下头文件:"
+          ls -la "$LIBJPEG_DIR/src/" | grep "\.h$"
+          echo "✓ 头文件位置确认正确"
         else
-          echo "✗ ERROR: skia.lib not found!"
-          echo "Available files in skia/out/Release-x64/:"
-          ls -la skia/out/Release-x64/ 2>/dev/null || echo "Directory does not exist"
+          echo "错误: 没有找到 src 目录"
           exit 1
         fi
 
-    # 6. 查找 libjpeg-turbo 头文件
-    - name: Find libjpeg-turbo headers
-      shell: bash
-      run: |
-        echo "Searching for libjpeg-turbo headers in Skia package..."
-        
-        # 查找 jpeg 相关的头文件
-        JPEG_HEADERS=$(find skia -name "j*.h" -o -name "*jpeg*.h" | head -5)
-        if [ -n "$JPEG_HEADERS" ]; then
-          echo "Found JPEG headers:"
-          echo "$JPEG_HEADERS"
-          JPEG_INCLUDE_DIR=$(dirname "$(echo "$JPEG_HEADERS" | head -1)")
-          echo "JPEG_INCLUDE_DIR=$JPEG_INCLUDE_DIR" >> $GITHUB_ENV
-          echo "Using JPEG include directory: $JPEG_INCLUDE_DIR"
-        else
-          echo "WARNING: No JPEG headers found in Skia package"
-          echo "JPEG_INCLUDE_DIR=" >> $GITHUB_ENV
-        fi
-        
-        # 查找 libjpeg 库文件
-        JPEG_LIBS=$(find skia -name "*jpeg*.lib" -o -name "libjpeg*.a" | head -3)
-        if [ -n "$JPEG_LIBS" ]; then
-          echo "Found JPEG libraries:"
-          echo "$JPEG_LIBS"
-          JPEG_LIBRARY=$(echo "$JPEG_LIBS" | head -1)
-          echo "JPEG_LIBRARY=$JPEG_LIBRARY" >> $GITHUB_ENV
-          echo "Using JPEG library: $JPEG_LIBRARY"
-        else
-          echo "WARNING: No JPEG libraries found in Skia package"
-          echo "JPEG_LIBRARY=" >> $GITHUB_ENV
-        fi
-
-    # 7. 创建构建目录并配置CMake（修复版）
+    # 7. 创建构建目录并配置CMake（关键修改！）
     - name: Configure CMake
       shell: bash
       run: |
         mkdir -p build
         cd build
         
-        # 构建CMake命令
-        CMAKE_CMD="cmake -G Ninja .. \
+        cmake -G Ninja .. \
           -DCMAKE_BUILD_TYPE=Release \
           -DLAF_BACKEND=skia \
           -DSKIA_DIR=../skia \
           -DSKIA_LIBRARY_DIR=../skia/out/Release-x64 \
-          -DSKIA_LIBRARY=../skia/out/Release-x64/skia.lib"
-        
-        # 如果找到了JPEG头文件和库，添加对应的参数
-        if [ -n "$JPEG_INCLUDE_DIR" ]; then
-          CMAKE_CMD="$CMAKE_CMD -DJPEG_INCLUDE_DIR=$JPEG_INCLUDE_DIR"
-        fi
-        
-        if [ -n "$JPEG_LIBRARY" ]; then
-          CMAKE_CMD="$CMAKE_CMD -DJPEG_LIBRARY=$JPEG_LIBRARY"
-        fi
-        
-        echo "Running CMake command:"
-        echo "$CMAKE_CMD"
-        
-        # 执行CMake命令
-        eval $CMAKE_CMD
+          -DSKIA_LIBRARY=../skia/out/Release-x64/skia.lib \
+          -DLIBJPEG_TURBO_INCLUDE_DIR=../skia/third_party/externals/libjpeg-turbo/src
 
     # 8. 编译Aseprite
     - name: Build Aseprite
@@ -151,7 +81,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: aseprite-windows-build
-        path: |
-          build/bin/aseprite.exe
-          # 如果需要，可以添加其他相关文件
-          # build/bin/data/
+        path: build/bin/aseprite.exe
