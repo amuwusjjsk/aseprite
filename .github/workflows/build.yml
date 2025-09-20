@@ -4,67 +4,109 @@ on: [push, pull_request]
 
 jobs:
   build-windows:
-    runs-on: windows-2022  # 使用 windows-2022 确保环境一致性
+    runs-on: windows-2022
 
     steps:
     # 1. 检出代码及子模块
     - name: Checkout repository and submodules
-      uses: actions/checkout@v4  # 更新到v4版本[citation:2][citation:5][citation:8]
+      uses: actions/checkout@v4
       with:
         submodules: 'recursive'
 
-    # 2. 安装构建工具 (CMake, Ninja)
-    - name: Install CMake and Ninja
-      run: choco install cmake ninja  # 使用 Chocolatey 包管理器安装，或使用 actions/setup-cmake
+    # 2. 安装构建工具
+    - name: Install build tools
+      run: |
+        choco install cmake ninja -y
+        choco install 7zip -y
 
-    # 3. 设置 MSVC 开发环境[citation:1]
-    - name: Setup MSVC Developer Command Prompt
-      uses: ilammy/msvc-dev-cmd@v1  # 此操作旨在设置MSVC环境
+    # 3. 设置MSVC开发环境
+    - name: Setup MSVC environment
+      uses: ilammy/msvc-dev-cmd@v1
 
-    # 4. 下载并解压 Skia (替换为您自己的可靠下载链接)
-    - name: Download and extract Skia
+    # 4. 下载Skia (使用官方链接，含重试机制)
+    - name: Download Skia
       shell: bash
       run: |
-        # 考虑将Skia作为GitHub Release的artifact上传并在此下载，或使用稳定的存储源
-        curl -L -o skia.zip https://github.com/aseprite/skia/releases/download/aseprite-m124/skia-windows-Release-x64.zip
-        7z x skia.zip -oskia
+        $SKIA_URL = "https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Windows-Release-x64.zip"
+        $SKIA_ZIP = "skia.zip"
+        $RETRY_COUNT = 3
+        
+        echo "Downloading Skia from official release: $SKIA_URL"
+        
+        # 重试循环
+        for ($i = 1; $i -le $RETRY_COUNT; $i++) {
+          echo "Attempt $i of $RETRY_COUNT"
+          
+          # 使用curl下载，-L跟随重定向
+          curl -L -o $SKIA_ZIP $SKIA_URL
+          
+          # 检查文件大小是否合理（应远大于9字节）
+          $FILE_SIZE = (Get-Item $SKIA_ZIP).Length
+          echo "Downloaded file size: $FILE_SIZE bytes"
+          
+          if ($FILE_SIZE -gt 1000000) {
+            echo "Download completed successfully."
+            break
+          }
+          
+          echo "Download may have failed, file is too small. Retrying in 5 seconds..."
+          Remove-Item $SKIA_ZIP -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 5
+          
+          # 最后一次尝试后失败
+          if ($i -eq $RETRY_COUNT) {
+            echo "ERROR: Failed to download Skia after $RETRY_COUNT attempts."
+            exit 1
+          }
+        }
 
-    # 5. 验证 Skia 提取结果
-    - name: Verify skia extraction
+    # 5. 解压Skia
+    - name: Extract Skia
       shell: bash
       run: |
-        echo "Listing skia directory:"
+        echo "Extracting Skia archive..."
+        7z x skia.zip -oskia -y
+        
+        # 验证解压结果
+        echo "Contents of skia directory:"
         ls -la skia/
+        
+        echo "Checking for expected files:"
+        if [ -f "skia/out/Release-x64/skia.lib" ]; then
+          echo "✓ skia.lib found successfully"
+        else
+          echo "✗ ERROR: skia.lib not found!"
+          echo "Available files in skia/out/Release-x64/:"
+          ls -la skia/out/Release-x64/ 2>/dev/null || echo "Directory does not exist"
+          exit 1
+        fi
 
-    # 6. 生成构建文件 (Configure with CMake)
-    - name: Generate build files with CMake
+    # 6. 创建构建目录并配置CMake
+    - name: Configure CMake
       shell: bash
       run: |
         mkdir build
         cd build
-        # 注意根据Skia的实际解压路径调整SKIA_DIR等变量
-        cmake -G Ninja .. \
-          -DCMAKE_BUILD_TYPE=Release \
-          -DLAF_BACKEND=skia \
-          -DSKIA_DIR=$GITHUB_WORKSPACE/skia \
-          -DSKIA_LIBRARY_DIR=$GITHUB_WORKSPACE/skia/out/Release-x64 \
-          -DSKIA_LIBRARY=$GITHUB_WORKSPACE/skia/out/Release-x64/skia.lib
+        cmake -G Ninja .. `
+          -DCMAKE_BUILD_TYPE=Release `
+          -DLAF_BACKEND=skia `
+          -DSKIA_DIR=$env:GITHUB_WORKSPACE/skia `
+          -DSKIA_LIBRARY_DIR=$env:GITHUB_WORKSPACE/skia/out/Release-x64 `
+          -DSKIA_LIBRARY=$env:GITHUB_WORKSPACE/skia/out/Release-x64/skia.lib
 
-    # 7. 编译项目
-    - name: Compile with Ninja
+    # 7. 编译Aseprite
+    - name: Build Aseprite
       shell: bash
       run: |
         cd build
-        ninja aseprite  # 明确指定目标
+        ninja aseprite
 
-    # 8. 上传构建产物 (使用更新的v4版本)[citation:2][citation:5][citation:8]
+    # 8. 上传构建成果
     - name: Upload Aseprite Artifact
       uses: actions/upload-artifact@v4
       with:
         name: aseprite-windows-build
         path: |
           build/bin/aseprite.exe
-          # 如果 libcrypto-1_1-x64.dll 是运行时依赖且已下载，包含它
-          libcrypto-1_1-x64.dll 
-          # 根据需要决定是否包含 data 目录
+          # 如果需要，可以添加其他相关文件
           # build/bin/data/
